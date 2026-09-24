@@ -3,6 +3,12 @@ const connection = document.querySelector('#connection');
 const messageForm = document.querySelector('#message-form');
 const messages = document.querySelector('#messages');
 const status = document.querySelector('#status');
+const exposureDialog = document.querySelector('#exposure-dialog');
+const exposureKey = document.querySelector('#exposure-key');
+const exposureCopy = document.querySelector('#exposure-copy');
+const exposureCopyStatus = document.querySelector('#exposure-copy-status');
+const drawingDialog = document.querySelector('#drawing-dialog');
+const drawingFrame = document.querySelector('#drawing-frame');
 const messageInput = document.querySelector('#message');
 const attachButton = document.querySelector('#attach-button');
 const attachmentInput = document.querySelector('#attachment');
@@ -60,6 +66,7 @@ let stagedFile;
 let stagedUrl;
 let stagedLink;
 let uploading = false;
+let drawingTarget = '';
 let activeUpload;
 
 function setStatus(text, error = false) {
@@ -680,6 +687,60 @@ function sendMessage(target, text) {
   return true;
 }
 
+function closeDrawing() {
+  if (drawingDialog.open) drawingDialog.close();
+  drawingFrame.removeAttribute('src');
+  drawingTarget = '';
+}
+
+function openDrawing(id = '') {
+  if (!/^(?:[0-9a-f]{32})?$/.test(id)) return false;
+  if (!session || signedOut || !socket || socket.readyState !== WebSocket.OPEN) {
+    setStatus('Connect to edit drawings.', true);
+    return false;
+  }
+  if (!id && !joined) {
+    setStatus('Join a channel before creating a drawing.', true);
+    return false;
+  }
+  if (drawingDialog.open) return false;
+  drawingTarget = channel;
+  drawingFrame.src = `./draw/${id ? `?id=${id}` : ''}`;
+  drawingDialog.showModal();
+  return true;
+}
+
+window.openDrawing = openDrawing;
+drawingDialog.addEventListener('cancel', event => {
+  event.preventDefault();
+  if (window.confirm('Close drawing? Unsaved changes may be lost.')) closeDrawing();
+});
+window.addEventListener('message', event => {
+  if (!drawingDialog.open || event.origin !== location.origin || event.source !== drawingFrame.contentWindow || !event.data || typeof event.data !== 'object') return;
+  const { type, id, revision } = event.data;
+  if (type === 'drawing-ready') {
+    if (!session || signedOut) return closeDrawing();
+    event.source.postMessage({ type: 'drawing-auth', username: session.username, password: session.password }, location.origin);
+  } else if (type === 'drawing-saved' && /^[0-9a-f]{32}$/.test(id) && Number.isInteger(revision) && revision > 0) {
+    for (const card of document.querySelectorAll(`.drawing-preview[data-drawing-id="${id}"]`)) {
+      const image = card.querySelector('img');
+      image.hidden = false;
+      image.src = `/drawings/${id}/preview?v=${revision}`;
+    }
+  } else if (type === 'drawing-share') {
+    const target = drawingTarget;
+    const link = /^[0-9a-f]{32}$/.test(id) ? new URL(`./draw/?id=${id}`, location.href).href : '';
+    const ok = !!link && !!target && channels.has(target.toLowerCase()) && sendMessage(target, link);
+    event.source.postMessage({ type: 'drawing-share-result', ok, error: ok ? '' : 'Could not send drawing. Stay in its channel and try again.' }, location.origin);
+    if (ok) {
+      closeDrawing();
+      setStatus(`Sent drawing to ${target}`);
+    }
+  } else if (type === 'drawing-close' || type === 'drawing-discard') {
+    closeDrawing();
+  }
+});
+
 function sendCommand(line) {
   if (!socket || socket.readyState !== WebSocket.OPEN || /[\x00-\x1f\x7f]/.test(line)) return false;
   if (encoder.encode(line).length > 510) {
@@ -689,6 +750,55 @@ function sendCommand(line) {
   socket.send(line);
   return true;
 }
+
+async function changeExposure(revoke) {
+  if (!session || !joined || !channel || !channels.has(channel.toLowerCase())) {
+    setStatus('Join a channel before changing its exposure.', true);
+    return;
+  }
+  const owner = session;
+  const target = channel;
+  try {
+    const response = await fetch(`/bot-api/v1/exposures${revoke ? '/revoke' : ''}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: owner.username, password: owner.password, channel: target })
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) throw new Error();
+    if (revoke) {
+      setStatus(`Exposure revoked for ${target}.`);
+      return;
+    }
+    if (typeof result?.key !== 'string' || !result.key || result.channel !== target) throw new Error();
+    if (session !== owner || signedOut) return;
+    exposureKey.value = result.key;
+    exposureDialog.querySelector('[data-exposure-channel]').textContent = result.channel;
+    exposureCopyStatus.textContent = '';
+    exposureDialog.showModal();
+    exposureCopy.focus();
+  } catch {
+    setStatus(`Could not ${revoke ? 'revoke' : 'create'} channel exposure. Check your credentials and channel permissions.`, true);
+  }
+}
+
+exposureDialog.addEventListener('close', () => {
+  exposureKey.value = '';
+  exposureCopyStatus.textContent = '';
+});
+exposureCopy.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(exposureKey.value);
+    exposureCopyStatus.textContent = 'Exposure key copied.';
+  } catch {
+    exposureKey.select();
+    exposureCopyStatus.textContent = 'Copy failed. Select and copy the key.';
+  }
+});
+exposureDialog.querySelector('[data-exposure-close]').addEventListener('click', () => exposureDialog.close());
+exposureDialog.addEventListener('cancel', () => {
+  exposureKey.value = '';
+});
 
 function runCommand(input) {
   const match = /^\/([a-z]+)(?:\s+(.*))?$/i.exec(input);
@@ -722,6 +832,11 @@ function runCommand(input) {
     return sendCommand(`TOPIC ${channel}${arg ? ` :${arg}` : ''}`);
   } else if (command === 'mode' && channel && joined && (!arg || /^(?:[+-][A-Za-z]+|b)(?:\s+[^\s,:\x00-\x1f]+)*$/.test(arg))) {
     return sendCommand(`MODE ${channel}${arg ? ` ${arg.replace(/\s+/g, ' ')}` : ''}`);
+  } else if (command === 'tldraw' && !arg) {
+    return openDrawing();
+  } else if ((command === 'expose' || command === 'unexpose') && !arg) {
+    changeExposure(command === 'unexpose');
+    return true;
   } else if (command === 'me' && arg) {
     return sendMessage(channel, `\x01ACTION ${arg}\x01`);
   } else if (command === 'clear') {
@@ -731,8 +846,8 @@ function runCommand(input) {
     messages.replaceChildren();
     seen.clear();
   } else if (command === 'help') {
-    addLine('', '/join #channel · /part [#channel] · /nick name · /me action · /clear · /help', true);
-    addLine('', '/kick nick [reason] · /ban nick|mask · /unban nick|mask · /invite nick · /topic [text] · /mode [modes] [args] (/mode b lists bans) · /op nick · /deop nick · /voice nick · /devoice nick', true);
+    addLine('', '/join #channel · /part [#channel] · /nick name · /me action · /tldraw · /expose · /unexpose · /clear · /help', true);
+    addLine('', '/tldraw opens a drawing. Save & send posts it to the current channel; tap a drawing preview to edit.', true);
   } else {
     setStatus('Invalid command. Type /help.', true);
     return false;
@@ -954,6 +1069,7 @@ joinForm.addEventListener('submit', event => {
 });
 
 disconnectButton.addEventListener('click', () => {
+  closeDrawing();
   signedOut = true;
   activeUpload?.abort();
   clearAttachment();

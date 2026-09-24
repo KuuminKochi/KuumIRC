@@ -28,6 +28,97 @@
     return mathReady;
   }
 
+  function typeset(element) {
+    typesetQueue = typesetQueue.then(loadMathJax).then(() => {
+      if (element.isConnected) return window.MathJax.typesetPromise([element]);
+    }).catch(() => {});
+  }
+
+  function botLink(url) {
+    if (url.origin !== location.origin || url.search || url.hash) return null;
+    const match = /^\/bot-api\/(quiz|question)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(url.pathname);
+    return match ? { type: match[1], id: match[2] } : null;
+  }
+
+  function appendBotCard(card, { type, id }) {
+    card.className = `chat-form-card ${type}-card`;
+    card.dataset.formId = id;
+    const prompt = document.createElement('span');
+    prompt.className = 'chat-form-prompt';
+    const feedback = document.createElement('p');
+    feedback.className = 'chat-form-feedback';
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-live', 'polite');
+    card.append(prompt, feedback);
+    const api = `/bot-api/v1/${type === 'quiz' ? 'quizzes' : 'questions'}/${id}`;
+    fetch(api).then(async response => {
+      if (!response.ok) throw new Error();
+      const view = await response.json();
+      if (typeof view?.question !== 'string' || !Array.isArray(view.options) || !view.options.length) throw new Error();
+      prompt.textContent = view.question;
+      typeset(prompt);
+      const form = document.createElement('form');
+      const group = document.createElement('fieldset');
+      const legend = document.createElement('legend');
+      legend.textContent = type === 'quiz' ? 'Choose an answer' : 'Choose an option';
+      group.append(legend);
+      const multiSelect = type === 'quiz' && view.multiSelect === true;
+      const inputs = [];
+      for (const [index, option] of view.options.entries()) {
+        if (typeof option?.label !== 'string' || typeof option.value !== 'string') throw new Error();
+        const label = document.createElement('label');
+        const input = document.createElement('input');
+        input.type = multiSelect ? 'checkbox' : 'radio';
+        input.name = `answer-${id}`;
+        input.value = option.value;
+        input.id = `answer-${id}-${index}`;
+        if (!multiSelect) input.required = true;
+        const text = document.createElement('span');
+        text.textContent = option.label;
+        label.append(input, text);
+        group.append(label);
+        inputs.push(input);
+        typeset(text);
+      }
+      const submit = document.createElement('button');
+      submit.type = 'submit';
+      submit.textContent = type === 'quiz' ? 'Submit answer' : 'Choose';
+      form.append(group, submit);
+      card.insertBefore(form, feedback);
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        const selected = inputs.filter(input => input.checked).map(input => input.value);
+        if (!selected.length) return;
+        submit.disabled = true;
+        feedback.textContent = 'Submitting…';
+        try {
+          const body = type === 'quiz'
+            ? { values: multiSelect ? selected : selected[0] }
+            : { value: selected[0] };
+          const response = await fetch(`${api}/answers`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+          const result = await response.json().catch(() => null);
+          if (!response.ok || !result) throw new Error();
+          group.disabled = true;
+          if (type === 'quiz') {
+            feedback.textContent = `${result.correct ? 'Correct.' : 'Not quite.'}${typeof result.correctAnswer === 'string' ? ` Correct answer: ${result.correctAnswer}.` : ''}${typeof result.explanation === 'string' && result.explanation ? ` ${result.explanation}` : ''}`;
+          } else {
+            feedback.textContent = 'Your choice has been recorded.';
+          }
+          typeset(feedback);
+        } catch {
+          feedback.textContent = 'Could not submit answer. Try again.';
+          submit.disabled = false;
+        }
+      });
+    }).catch(() => {
+      feedback.textContent = 'This quiz or question is unavailable.';
+    });
+  }
+
   function appendText(parent, text) {
     const lines = text.split(/\r\n|\r|\n/);
     lines.forEach((line, index) => {
@@ -166,6 +257,38 @@
   }
 
   function appendLink(parent, rawUrl, url, previews) {
+    if (url.origin === location.origin && url.pathname === '/draw/' && !url.hash && url.searchParams.size === 1) {
+      const id = url.searchParams.get('id');
+      if (/^[0-9a-f]{32}$/.test(id || '')) {
+        const card = document.createElement('a');
+        card.className = 'drawing-preview';
+        card.href = url.href;
+        card.dataset.drawingId = id;
+        card.setAttribute('aria-label', 'Edit drawing');
+        const image = document.createElement('img');
+        image.src = `/drawings/${id}/preview`;
+        image.alt = '';
+        image.loading = 'lazy';
+        const empty = document.createElement('span');
+        empty.className = 'drawing-empty';
+        empty.textContent = 'Drawing preview unavailable';
+        empty.hidden = true;
+        image.addEventListener('error', () => { image.hidden = true; empty.hidden = false; });
+        image.addEventListener('load', () => { image.hidden = false; empty.hidden = true; });
+        const label = document.createElement('span');
+        label.className = 'drawing-label';
+        label.textContent = 'Drawing · Tap to edit';
+        card.append(image, empty, label);
+        card.addEventListener('click', event => {
+          if (window.openDrawing) {
+            event.preventDefault();
+            window.openDrawing(id);
+          }
+        });
+        previews.push(card);
+        return;
+      }
+    }
     const localVideo = url.pathname.startsWith('/media/videos/') && mediaKind(url) === 'video';
     const posterUrl = localVideo && url.hash.startsWith('#poster=')
       ? localMediaUrl(new URLSearchParams(url.hash.slice(1)).get('poster') || '')
