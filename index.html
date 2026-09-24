@@ -18,20 +18,22 @@
       <ol id="messages" role="log" aria-label="Channel messages" aria-live="polite" aria-relevant="additions"><li class="event">Connect to start chatting.</li></ol>
       <aside class="member-pane" aria-label="Channel members"><ul id="members"></ul></aside>
     </main>
-    <form id="message-form" class="composer"><label for="message" class="visually-hidden">Message</label><input id="message" placeholder="Message #lobby" maxlength="400" autocomplete="off" disabled><button id="send-button" type="submit" disabled>Send</button></form>
+    <form id="message-form" class="composer"><button id="attach-button" type="button" aria-label="Attach image or video" disabled>Attach</button><input id="attachment" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/ogg" hidden><label for="message" class="visually-hidden">Message</label><input id="message" placeholder="Message #lobby" maxlength="400" autocomplete="off" disabled><button id="send-button" type="submit" disabled>Send</button></form>
     <footer>
       <details id="connection"><summary>Connect</summary>
         <form id="connect-form" autocomplete="off">
-          <label for="username">Username</label><input id="username" name="username" autocomplete="username" required placeholder="alice" maxlength="32">
+          <label for="username">Username</label><input id="username" name="username" autocomplete="username" required placeholder="alice">
           <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>
-          <label class="remember"><input id="remember" type="checkbox" checked> Remember on this device</label>
+          <label class="remember"><input id="remember" type="checkbox"> Remember on this device</label>
           <label for="channel">Channel</label><input id="channel" name="channel" required value="#lobby" maxlength="64" spellcheck="false">
           <div class="connect-actions"><button type="submit" id="connect-button">Connect</button><button type="button" id="register-button">Register</button></div>
+          <p class="account-rules" id="account-rules">Username: 1–255 UTF-8 bytes. Letters, numbers, spaces, Unicode and punctuation allowed except / @ : and control characters. Outer spaces ignored; non-IRC names get a generated nick. Password: 4–128 printable characters.</p>
         </form>
       </details>
       <nav id="channels" class="channels" aria-label="Channels"></nav>
+      <button id="edit-tabs" type="button" hidden>Edit tabs</button>
       <button id="join-toggle" type="button" aria-label="Join channel" hidden>+</button>
-      <form id="join-form" hidden><label for="join-channel" class="visually-hidden">Channel to join</label><input id="join-channel" placeholder="#channel" maxlength="64"><button type="submit">Join</button></form>
+      <form id="join-form" hidden><div class="join-heading"><strong>Join channel</strong><button id="join-close" type="button" aria-label="Close join channel">×</button></div><div id="hidden-channels"></div><label for="join-channel" class="visually-hidden">Channel to join</label><div class="join-entry"><input id="join-channel" placeholder="#channel" maxlength="64"><button type="submit">Join</button></div></form>
       <span id="status" role="status">Not connected</span>
       <button id="disconnect-button" type="button" hidden>Sign out</button>
     </footer>

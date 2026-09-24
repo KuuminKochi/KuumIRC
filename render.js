@@ -61,21 +61,171 @@
     if (/\.(?:mp3|ogg|oga|opus|wav|m4a|aac|flac)$/.test(path)) return 'audio';
     return '';
   }
+  function localMediaUrl(value) {
+    try {
+      const url = new URL(value, location.origin);
+      return url.origin === location.origin && url.pathname.startsWith('/media/')
+        && !url.username && !url.password && !url.search && !url.hash ? url.href : '';
+    } catch {
+      return '';
+    }
+  }
+
+  const legacyThumbnails = new Map();
+  let legacyThumbnailObserver;
+
+  function legacyThumbnail(source) {
+    if (legacyThumbnails.has(source)) return legacyThumbnails.get(source);
+    const result = new Promise(resolve => {
+      const probe = document.createElement('video');
+      let timer;
+      let done = false;
+      const finish = poster => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        probe.pause();
+        probe.removeAttribute('src');
+        probe.load();
+        resolve(poster);
+      };
+      const capture = () => {
+        try {
+          const scale = Math.min(1, 512 / probe.videoWidth, 512 / probe.videoHeight);
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(probe.videoWidth * scale);
+          canvas.height = Math.round(probe.videoHeight * scale);
+          const context = canvas.getContext('2d');
+          if (!context || !canvas.width || !canvas.height) return finish('');
+          context.drawImage(probe, 0, 0, canvas.width, canvas.height);
+          finish(canvas.toDataURL('image/jpeg', 0.75));
+        } catch {
+          finish('');
+        }
+      };
+      probe.muted = true;
+      probe.playsInline = true;
+      probe.preload = 'metadata';
+      probe.addEventListener('loadedmetadata', () => {
+        if (!(probe.duration > 0)) return finish('');
+        try {
+          probe.currentTime = Math.min(0.5, probe.duration / 2);
+        } catch {
+          finish('');
+        }
+      }, { once: true });
+      probe.addEventListener('seeked', capture, { once: true });
+      probe.addEventListener('error', () => finish(''), { once: true });
+      timer = setTimeout(() => finish(''), 8000);
+      probe.src = source;
+    });
+    legacyThumbnails.set(source, result);
+    if (legacyThumbnails.size > 24) legacyThumbnails.delete(legacyThumbnails.keys().next().value);
+    return result;
+  }
+
+  function observeLegacyVideo(video) {
+    if (!('IntersectionObserver' in window)) return;
+    legacyThumbnailObserver ??= new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.target.isConnected) {
+          legacyThumbnailObserver.unobserve(entry.target);
+          continue;
+        }
+        if (!entry.isIntersecting) continue;
+        legacyThumbnailObserver.unobserve(entry.target);
+        legacyThumbnail(entry.target.src).then(poster => {
+          if (poster && entry.target.isConnected && !entry.target.poster) entry.target.poster = poster;
+        });
+      }
+    }, { rootMargin: '100px' });
+    legacyThumbnailObserver.observe(video);
+  }
+  function providerEmbed(url) {
+    const host = url.hostname.toLowerCase();
+    let id;
+    if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtube-nocookie.com', 'www.youtube-nocookie.com', 'youtu.be'].includes(host)) {
+      id = host === 'youtu.be' ? url.pathname.slice(1) : (
+        url.pathname === '/watch' ? url.searchParams.get('v') : /^\/(?:shorts|live|embed)\/([A-Za-z0-9_-]{11})\/?$/.exec(url.pathname)?.[1]
+      );
+      if (/^[A-Za-z0-9_-]{11}$/.test(id || '')) return { label: 'YouTube video', src: `https://www.youtube-nocookie.com/embed/${id}`, poster: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`, height: 225 };
+    }
+    if (host === 'vimeo.com' || host === 'www.vimeo.com' || host === 'player.vimeo.com') {
+      id = /^\/(?:video\/)?(\d{6,12})\/?$/.exec(url.pathname)?.[1];
+      if (id) return { label: 'Vimeo video', src: `https://player.vimeo.com/video/${id}`, height: 225 };
+    }
+    if (host === 'open.spotify.com') {
+      const match = /^\/(track|album|playlist|episode)\/([A-Za-z0-9]{22})\/?$/.exec(url.pathname);
+      if (match) return { label: 'Spotify audio', src: `https://open.spotify.com/embed/${match[1]}/${match[2]}`, height: 152 };
+    }
+    if (host === 'giphy.com' || host === 'www.giphy.com') {
+      id = /^\/(?:embed\/([A-Za-z0-9]+)|gifs\/[^/]*-([A-Za-z0-9]+))\/?$/.exec(url.pathname);
+      if (id) return { label: 'Giphy image', src: `https://giphy.com/embed/${id[1] || id[2]}`, height: 225 };
+    }
+    return null;
+  }
 
   function appendLink(parent, rawUrl, url, previews) {
+    const localVideo = url.pathname.startsWith('/media/videos/') && mediaKind(url) === 'video';
+    const posterUrl = localVideo && url.hash.startsWith('#poster=')
+      ? localMediaUrl(new URLSearchParams(url.hash.slice(1)).get('poster') || '')
+      : '';
+    if (localVideo) {
+      rawUrl = rawUrl.split('#', 1)[0];
+      url.hash = '';
+    }
+    const kind = mediaKind(url);
+    const localUpload = url.origin === location.origin
+      && (url.pathname.startsWith('/uploads/')
+        || (url.pathname.startsWith('/media/') && !url.search && !url.hash));
     const link = document.createElement('a');
     link.href = url.href;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
     link.referrerPolicy = 'no-referrer';
-    link.textContent = rawUrl;
-    parent.append(link);
-    const kind = mediaKind(url);
-    if (!kind || privateAddress(url.hostname)) return;
+    link.textContent = localUpload && kind ? 'Open original' : rawUrl;
+    if (!localUpload || !kind) parent.append(link);
+    const embed = providerEmbed(url);
+    if (embed) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `embed-preview${embed.height === 152 ? ' audio' : ''}`;
+      button.setAttribute('aria-label', `Play ${embed.label}`);
+      if (embed.poster) {
+        const poster = document.createElement('img');
+        poster.src = embed.poster;
+        poster.alt = '';
+        poster.loading = 'lazy';
+        poster.referrerPolicy = 'no-referrer';
+        button.append(poster);
+      }
+      const play = document.createElement('span');
+      play.className = 'embed-play';
+      play.setAttribute('aria-hidden', 'true');
+      const caption = document.createElement('span');
+      caption.className = 'embed-caption';
+      caption.textContent = embed.label;
+      button.append(play, caption);
+      button.addEventListener('click', () => {
+        const frame = document.createElement('iframe');
+        frame.src = embed.src;
+        frame.title = embed.label;
+        frame.className = 'embed-frame';
+        frame.style.height = `${embed.height}px`;
+        frame.loading = 'lazy';
+        frame.referrerPolicy = embed.label === 'YouTube video' ? 'origin' : 'no-referrer';
+        frame.sandbox.add('allow-scripts', 'allow-same-origin', 'allow-presentation');
+        frame.allow = 'autoplay; encrypted-media; fullscreen; picture-in-picture';
+        frame.allowFullscreen = true;
+        button.replaceWith(frame);
+      });
+      previews.push(button);
+      return;
+    }
+    if (!kind || (!localUpload && privateAddress(url.hostname))) return;
     if (kind === 'image') {
       const image = document.createElement('img');
-      image.src = url.href;
-      image.alt = rawUrl;
+      image.alt = localUpload ? 'Uploaded image preview' : rawUrl;
       image.loading = 'lazy';
       image.style.maxWidth = '20rem';
       image.style.maxHeight = '12rem';
@@ -83,16 +233,26 @@
       image.referrerPolicy = 'no-referrer';
       const preview = link.cloneNode(false);
       preview.append(image);
+      if (localUpload) image.addEventListener('error', () => preview.remove(), { once: true });
+      image.src = url.href;
       previews.push(preview);
     } else {
       const media = document.createElement(kind);
       media.src = url.href;
+      if (kind === 'video') {
+        if (posterUrl) media.poster = posterUrl;
+        else if (localUpload && url.pathname.startsWith('/uploads/') && !url.hash) observeLegacyVideo(media);
+        media.playsInline = true;
+      }
       media.controls = true;
       media.preload = 'none';
       media.referrerPolicy = 'no-referrer';
       media.style.maxWidth = '28rem';
-      if (kind === 'video') media.playsInline = true;
       previews.push(media);
+    }
+    if (localUpload) {
+      link.className = 'open-original';
+      previews.push(link);
     }
   }
 

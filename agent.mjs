@@ -1,11 +1,21 @@
 #!/usr/bin/env node
 import readline from 'node:readline';
 
-const { KUUMIRC_URL, KUUMIRC_USER: user, KUUMIRC_PASSWORD: password, KUUMIRC_CHANNEL: channel = '#lobby' } = process.env;
-if (!KUUMIRC_URL || !/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(user || '') || !password || /[\r\n]/.test(password) || !/^#[^\s,\x00-\x1f]{1,63}$/.test(channel)) {
-  console.error('Set KUUMIRC_URL, KUUMIRC_USER, KUUMIRC_PASSWORD, and optionally KUUMIRC_CHANNEL.');
+const { KUUMIRC_URL, KUUMIRC_USER: rawUser, KUUMIRC_PASSWORD: password, KUUMIRC_CHANNEL: channel = '#lobby' } = process.env;
+const user = rawUser?.trim();
+if (!KUUMIRC_URL || !user || Buffer.byteLength(user, 'utf8') > 255 || /[\x00-\x1f\x7f-\x9f/@:]/u.test(user) || !password || /[\r\n]/.test(password) || !/^#[^\s,\x00-\x1f]{1,63}$/.test(channel)) {
+  console.error('Set KUUMIRC_URL, KUUMIRC_USER, KUUMIRC_PASSWORD, and optionally KUUMIRC_CHANNEL. Username must be 1–255 UTF-8 bytes and cannot contain controls, /, @, or :.');
   process.exit(1);
 }
+
+function loginNick(username) {
+  if (/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(username)) return username;
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of Buffer.from(username, 'utf8')) hash = BigInt.asUintN(64, (hash ^ BigInt(byte)) * 0x100000001b3n);
+  return `u${hash.toString(16).padStart(16, '0')}`;
+}
+
+const nick = loginNick(user);
 
 const url = new URL(KUUMIRC_URL);
 if (url.protocol === 'https:') url.protocol = 'wss:';
@@ -21,6 +31,8 @@ const available = new Set();
 let history = '';
 let ready = false;
 let hasHistory = false;
+let saslStarted = false;
+let saslComplete = false;
 const print = event => console.log(JSON.stringify(event));
 
 function parse(line) {
@@ -47,23 +59,44 @@ function parse(line) {
 
 socket.addEventListener('open', () => {
   socket.send('CAP LS 302');
-  socket.send(`PASS :${password}`);
-  socket.send(`NICK ${user}`);
-  socket.send(`USER ${user}/local@agent-${process.pid} 0 * :Agent`);
+  socket.send(`NICK ${nick}`);
+  socket.send(`USER agent/local@agent-${process.pid} 0 * :Agent`);
 });
 socket.addEventListener('message', event => {
   const { command, parts, nick, tags } = parse(String(event.data));
   if (command === 'CAP' && parts[1] === 'LS') {
     for (const cap of (parts.at(-1) || '').split(' ')) available.add(cap.split('=')[0]);
     if (parts[2] !== '*') {
-      const request = wanted.filter(cap => available.has(cap));
-      socket.send(request.length ? `CAP REQ :${request.join(' ')}` : 'CAP END');
+      if (!available.has('sasl')) {
+        console.error('Server does not support SASL authentication');
+        socket.close();
+        return;
+      }
+      socket.send(`CAP REQ :${[...new Set([...wanted.filter(cap => available.has(cap)), 'sasl'])].join(' ')}`);
     }
   } else if (command === 'CAP' && parts[1] === 'ACK') {
-    hasHistory = (parts.at(-1) || '').split(' ').includes('draft/chathistory');
-    socket.send('CAP END');
+    const accepted = (parts.at(-1) || '').split(' ');
+    hasHistory = accepted.includes('draft/chathistory');
+    if (accepted.some(cap => cap.replace(/^-/, '').split('=')[0] === 'sasl')) {
+      saslStarted = true;
+      socket.send('AUTHENTICATE PLAIN');
+    } else {
+      console.error('Server declined SASL authentication');
+      socket.close();
+    }
   } else if (command === 'CAP' && parts[1] === 'NAK') {
+    console.error('Server declined SASL authentication');
+    socket.close();
+  } else if (command === 'AUTHENTICATE' && saslStarted && !saslComplete && parts[0] === '+') {
+    const payload = Buffer.from(`\0${user}\0${password}`, 'utf8').toString('base64');
+    for (let offset = 0; offset < payload.length; offset += 400) socket.send(`AUTHENTICATE ${payload.slice(offset, offset + 400)}`);
+    if (payload.length % 400 === 0) socket.send('AUTHENTICATE +');
+    saslComplete = true;
+  } else if (command === '903' && saslStarted) {
     socket.send('CAP END');
+  } else if (['904', '905', '906', '907'].includes(command)) {
+    console.error('SASL authentication failed; check KUUMIRC_USER and KUUMIRC_PASSWORD');
+    socket.close();
   } else if (command === 'PING') {
     socket.send(`PONG :${parts.at(-1)}`);
   } else if (command === '001') {
