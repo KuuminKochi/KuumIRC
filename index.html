@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#d8d8d8">
+  <meta name="description" content="A small IRC client for your own network.">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon-192.png" type="image/png">
+  <link rel="stylesheet" href="./style.css">
+  <title>KuumIRC</title>
+  <script src="./client.js" defer></script>
+</head>
+<body>
+  <div class="app">
+    <main class="workspace">
+      <ol id="messages" role="log" aria-label="Channel messages" aria-live="polite" aria-relevant="additions"><li class="event">Connect to start chatting.</li></ol>
+      <aside class="member-pane" aria-label="Channel members"><ul id="members"></ul></aside>
+    </main>
+    <form id="message-form" class="composer"><label for="message" class="visually-hidden">Message</label><input id="message" placeholder="Message #lobby" maxlength="400" autocomplete="off" disabled><button id="send-button" type="submit" disabled>Send</button></form>
+    <footer>
+      <details id="connection"><summary>Connect</summary>
+        <form id="connect-form" autocomplete="off">
+          <label for="username">Username</label><input id="username" name="username" autocomplete="username" required placeholder="alice" maxlength="32">
+          <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>
+          <label for="channel">Channel</label><input id="channel" name="channel" required value="#lobby" maxlength="64" spellcheck="false">
+          <button type="submit" id="connect-button">Connect</button>
+        </form>
+      </details>
+      <span id="channel-title">#lobby</span>
+      <span id="status" role="status">Not connected</span>
+      <button id="disconnect-button" type="button" hidden>Disconnect</button>
+    </footer>
+  </div>
+</body>
+</html>
