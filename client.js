@@ -66,10 +66,24 @@ function setStatus(text, error = false) {
   status.classList.toggle('error', error);
 }
 
+function isCreatorNick(name) {
+  return name.toLowerCase() === 'kuumin';
+}
+
 function renderMembers() {
   memberList.replaceChildren(...[...members.values()].sort((a, b) => a.localeCompare(b)).map(name => {
     const item = document.createElement('li');
-    item.textContent = name;
+    const prefix = name.match(/^[~&@%+]+/)?.[0] || '';
+    if (prefix.includes('@')) item.title = '@ means channel operator';
+    if (isCreatorNick(memberKey(name))) {
+      item.append(prefix);
+      const creator = document.createElement('span');
+      creator.className = 'creator-nick';
+      creator.textContent = name.slice(prefix.length);
+      item.append(creator);
+    } else {
+      item.textContent = name;
+    }
     return item;
   }));
 }
@@ -236,10 +250,16 @@ function addLine(name, text, event = false, time = '', id = '') {
     clock.textContent = (Number.isNaN(date.getTime()) ? new Date() : date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const author = document.createElement('strong');
     author.textContent = name;
+    if (isCreatorNick(name)) author.classList.add('creator-nick');
     item.append(clock, author);
   }
   const body = document.createElement('span');
-  if (event || !window.renderMessageContent) body.textContent = text;
+  if (event && name) {
+    const actor = document.createElement('strong');
+    actor.textContent = name;
+    if (isCreatorNick(name)) actor.classList.add('creator-nick');
+    body.append('* ', actor, ` ${text}`);
+  } else if (event || !window.renderMessageContent) body.textContent = text;
   else window.renderMessageContent(body, text);
   item.append(body);
   if (id) item.dataset.msgid = id;
@@ -285,7 +305,7 @@ function displayChat(message) {
   if (id && seen.has(id)) return;
   if (id) seen.add(id);
   const action = /^\x01ACTION (.*)\x01$/.exec(message.text);
-  if (action) addLine('', `* ${message.nick} ${action[1]}`, true, message.tags.time, id);
+  if (action) addLine(message.nick, action[1], true, message.tags.time, id);
   else addLine(message.nick, message.text, false, message.tags.time, id);
 }
 
@@ -413,7 +433,7 @@ function handle(line, ws) {
     if (target === channel.toLowerCase()) {
       members.set(memberKey(sender), sender);
       renderMembers();
-      addLine('', `${sender} joined ${channel}`, true);
+      addLine(sender, `joined ${channel}`, true);
     }
   } else if (command === 'PART' && target?.startsWith('#')) {
     if (sender.toLowerCase() === nick.toLowerCase()) {
@@ -439,7 +459,7 @@ function handle(line, ws) {
     } else if (target === channel.toLowerCase()) {
       members.delete(memberKey(sender));
       renderMembers();
-      addLine('', `${sender} left ${channel}`, true);
+      addLine(sender, `left ${channel}`, true);
     }
   } else if (command === 'QUIT') {
     members.delete(memberKey(sender));
@@ -623,7 +643,7 @@ function sendMessage(target, text) {
   socket.send(line);
   if (!caps.has('echo-message') && target.toLowerCase() === channel?.toLowerCase()) {
     const action = /^\x01ACTION (.*)\x01$/.exec(text);
-    if (action) addLine('', `* ${nick} ${action[1]}`, true);
+    if (action) addLine(nick, action[1], true);
     else addLine(nick, text);
   }
   return true;

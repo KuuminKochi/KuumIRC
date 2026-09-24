@@ -14,6 +14,10 @@ input { min-width: 0; padding: 5px 7px; border: 1px solid #999; border-radius: 2
 .line { display: flex; gap: 9px; align-items: flex-start; }
 .line time { flex: none; color: #777; font-size: 11px; }
 .line strong { flex: none; color: #205496; }
+#messages .creator-nick, #members .creator-nick { color: #73439a; font-weight: 700; }
+@supports ((background-clip: text) or (-webkit-background-clip: text)) {
+  #messages .creator-nick, #members .creator-nick { background: linear-gradient(90deg, #bb303b, #a55b0a, #227638, #2167a6, #703fa5, #a4357b); background-clip: text; -webkit-background-clip: text; color: transparent; -webkit-text-fill-color: transparent; }
+}
 .line span { white-space: pre-wrap; }
 .line > span { flex: 1; min-width: 0; }
 .media-attachments { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 6px; max-width: 100%; min-width: 0; white-space: normal; }
