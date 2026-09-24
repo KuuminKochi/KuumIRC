@@ -233,7 +233,10 @@
       image.referrerPolicy = 'no-referrer';
       const preview = link.cloneNode(false);
       preview.append(image);
-      if (localUpload) image.addEventListener('error', () => preview.remove(), { once: true });
+      if (localUpload) image.addEventListener('error', () => {
+        preview.remove();
+        if (!link.isConnected) parent.append(link);
+      }, { once: true });
       image.src = url.href;
       previews.push(preview);
     } else {
@@ -249,10 +252,10 @@
       media.referrerPolicy = 'no-referrer';
       media.style.maxWidth = '28rem';
       previews.push(media);
-    }
-    if (localUpload) {
-      link.className = 'open-original';
-      previews.push(link);
+      if (localUpload) {
+        link.className = 'open-original';
+        previews.push(link);
+      }
     }
   }
 

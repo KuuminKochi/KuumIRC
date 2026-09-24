@@ -1,4 +1,4 @@
-const CACHE = 'kuumirc-shell-v16';
+const CACHE = 'kuumirc-shell-v17';
 const SHELL = ['./', './index.html', './style.css', './client.js', './render.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', event => {
