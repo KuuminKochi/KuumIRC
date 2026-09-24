@@ -44,6 +44,7 @@ let socket;
 let channel;
 let nick;
 let joined = false;
+let refreshingMembers = false;
 let requestedChannel = '';
 let retryTimer;
 let retryDelay = 1000;
@@ -225,6 +226,7 @@ function selectChannel(name) {
   historyMessages = [];
   liveMessages = [];
   seen.clear();
+  refreshingMembers = false;
   members.clear();
   renderMembers();
   if (window.MathJax?.typesetClear) window.MathJax.typesetClear([messages]);
@@ -395,7 +397,14 @@ function handle(line, ws) {
     editTabs.hidden = false;
     selectChannel(channel);
   } else if (command === '353' && params[2]?.toLowerCase() === channel.toLowerCase()) {
+    if (refreshingMembers) {
+      members.clear();
+      refreshingMembers = false;
+    }
     for (const name of (params[3] || '').split(' ')) if (name) members.set(memberKey(name), name);
+  } else if (command === '366' && params[1]?.toLowerCase() === channel.toLowerCase() && requestedChannel === channel.toLowerCase()) {
+    refreshingMembers = false;
+    renderMembers();
   } else if (command === '366' && params[1]?.toLowerCase() === channel.toLowerCase() && requestedChannel !== channel.toLowerCase()) {
     requestedChannel = channel.toLowerCase();
     renderMembers();
@@ -435,8 +444,30 @@ function handle(line, ws) {
       renderMembers();
       addLine(sender, `joined ${channel}`, true);
     }
-  } else if (command === 'PART' && target?.startsWith('#')) {
-    if (sender.toLowerCase() === nick.toLowerCase()) {
+  } else if (command === 'MODE' && target === channel.toLowerCase()) {
+    addLine(sender, `set mode ${params.slice(1).join(' ')}`, true);
+    if (/[+-][^+-]*[qaohv]/.test(params[1] || '')) {
+      refreshingMembers = true;
+      ws.send(`NAMES ${channel}`);
+    }
+  } else if (command === 'TOPIC' && target === channel.toLowerCase()) {
+    addLine(sender, `changed topic to ${params[1] || '(no topic)'}`, true);
+  } else if (command === '332' && params[1]?.toLowerCase() === channel.toLowerCase()) {
+    addLine('', `Topic: ${params[2]}`, true);
+  } else if (command === '331' && params[1]?.toLowerCase() === channel.toLowerCase()) {
+    addLine('', 'No topic set.', true);
+  } else if (command === '341') {
+    addLine('', `Invited ${params[1]} to ${params[2]}`, true);
+  } else if (command === '324' && params[1]?.toLowerCase() === channel.toLowerCase()) {
+    addLine('', `Channel modes: ${params.slice(2).join(' ')}`, true);
+  } else if (command === '367' && params[1]?.toLowerCase() === channel.toLowerCase()) {
+    addLine('', `Ban: ${params[2]}`, true);
+  } else if (command === '368' && params[1]?.toLowerCase() === channel.toLowerCase()) {
+    addLine('', 'End of ban list.', true);
+  } else if ((command === 'PART' || command === 'KICK') && target?.startsWith('#')) {
+    const leaving = command === 'KICK' ? params[1] : sender;
+    const kicked = command === 'KICK';
+    if (leaving?.toLowerCase() === nick.toLowerCase()) {
       channels.delete(target);
       tabOrder = tabOrder.filter(name => name !== target);
       hiddenTabs.delete(target);
@@ -453,13 +484,13 @@ function handle(line, ws) {
           historyResizeObserver?.disconnect();
           historyResizeObserver = undefined;
           messages.replaceChildren();
-          setStatus('No channel joined');
+          setStatus(kicked ? `Kicked from ${params[0]}` : 'No channel joined', kicked);
         }
       }
     } else if (target === channel.toLowerCase()) {
-      members.delete(memberKey(sender));
+      members.delete(memberKey(leaving));
       renderMembers();
-      addLine(sender, `left ${channel}`, true);
+      addLine(leaving, kicked ? `was kicked by ${sender}${params[2] ? `: ${params[2]}` : ''}` : `left ${channel}`, true);
     }
   } else if (command === 'QUIT') {
     members.delete(memberKey(sender));
@@ -472,7 +503,7 @@ function handle(line, ws) {
       renderMembers();
     }
     if (sender.toLowerCase() === nick.toLowerCase()) nick = params[0];
-  } else if (command === 'ERROR' || ['464', '433', '471', '473', '474', '475', '476', '403', '404'].includes(command)) {
+  } else if (command === 'ERROR' || ['464', '433', '471', '473', '474', '475', '476', '403', '404', '401', '441', '442', '443', '461', '467', '472', '478', '482'].includes(command)) {
     const reason = params.at(-1) || 'Connection failed';
     addLine('', reason, true);
     setStatus(reason, true);
@@ -649,6 +680,16 @@ function sendMessage(target, text) {
   return true;
 }
 
+function sendCommand(line) {
+  if (!socket || socket.readyState !== WebSocket.OPEN || /[\x00-\x1f\x7f]/.test(line)) return false;
+  if (encoder.encode(line).length > 510) {
+    setStatus('Command too long for IRC.', true);
+    return false;
+  }
+  socket.send(line);
+  return true;
+}
+
 function runCommand(input) {
   const match = /^\/([a-z]+)(?:\s+(.*))?$/i.exec(input);
   const command = match?.[1].toLowerCase();
@@ -662,6 +703,25 @@ function runCommand(input) {
     socket.send(`PART ${channels.get((arg || channel).toLowerCase())}`);
   } else if (command === 'nick' && /^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(arg)) {
     socket.send(`NICK ${arg}`);
+  } else if (['kick', 'ban', 'unban', 'op', 'deop', 'voice', 'devoice', 'invite'].includes(command)) {
+    const [who, ...reason] = arg.split(/\s+/);
+    const nickname = /^[^\s,:!@*?\x00-\x1f]{1,64}$/.test(who);
+    const mask = /^[^\s,:\x00-\x1f]{1,128}$/.test(who);
+    const isBan = command === 'ban' || command === 'unban';
+    const fullMask = who.includes('!') || who.includes('@');
+    if (!channel || !joined || !(isBan && fullMask ? mask : nickname) || (command !== 'kick' && reason.length)) {
+      setStatus(`Invalid /${command} arguments. Type /help.`, true);
+      return false;
+    }
+    if (command === 'kick') return sendCommand(`KICK ${channel} ${who}${reason.length ? ` :${reason.join(' ')}` : ''}`);
+    if (command === 'invite') return sendCommand(`INVITE ${who} ${channel}`);
+    if (isBan) return sendCommand(`MODE ${channel} ${command === 'ban' ? '+' : '-'}b ${fullMask ? who : `${who}!*@*`}`);
+    const mode = { op: '+o', deop: '-o', voice: '+v', devoice: '-v' }[command];
+    return sendCommand(`MODE ${channel} ${mode} ${who}`);
+  } else if (command === 'topic' && channel && joined) {
+    return sendCommand(`TOPIC ${channel}${arg ? ` :${arg}` : ''}`);
+  } else if (command === 'mode' && channel && joined && (!arg || /^(?:[+-][A-Za-z]+|b)(?:\s+[^\s,:\x00-\x1f]+)*$/.test(arg))) {
+    return sendCommand(`MODE ${channel}${arg ? ` ${arg.replace(/\s+/g, ' ')}` : ''}`);
   } else if (command === 'me' && arg) {
     return sendMessage(channel, `\x01ACTION ${arg}\x01`);
   } else if (command === 'clear') {
@@ -672,6 +732,7 @@ function runCommand(input) {
     seen.clear();
   } else if (command === 'help') {
     addLine('', '/join #channel · /part [#channel] · /nick name · /me action · /clear · /help', true);
+    addLine('', '/kick nick [reason] · /ban nick|mask · /unban nick|mask · /invite nick · /topic [text] · /mode [modes] [args] (/mode b lists bans) · /op nick · /deop nick · /voice nick · /devoice nick', true);
   } else {
     setStatus('Invalid command. Type /help.', true);
     return false;
