@@ -9,6 +9,7 @@
   <link rel="icon" href="./icon-192.png" type="image/png">
   <link rel="stylesheet" href="./style.css">
   <title>KuumIRC</title>
+  <script src="./render.js" defer></script>
   <script src="./client.js" defer></script>
 </head>
 <body>
@@ -23,13 +24,16 @@
         <form id="connect-form" autocomplete="off">
           <label for="username">Username</label><input id="username" name="username" autocomplete="username" required placeholder="alice" maxlength="32">
           <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>
+          <label class="remember"><input id="remember" type="checkbox" checked> Remember on this device</label>
           <label for="channel">Channel</label><input id="channel" name="channel" required value="#lobby" maxlength="64" spellcheck="false">
-          <button type="submit" id="connect-button">Connect</button>
+          <div class="connect-actions"><button type="submit" id="connect-button">Connect</button><button type="button" id="register-button">Register</button></div>
         </form>
       </details>
-      <span id="channel-title">#lobby</span>
+      <nav id="channels" class="channels" aria-label="Channels"></nav>
+      <button id="join-toggle" type="button" aria-label="Join channel" hidden>+</button>
+      <form id="join-form" hidden><label for="join-channel" class="visually-hidden">Channel to join</label><input id="join-channel" placeholder="#channel" maxlength="64"><button type="submit">Join</button></form>
       <span id="status" role="status">Not connected</span>
-      <button id="disconnect-button" type="button" hidden>Disconnect</button>
+      <button id="disconnect-button" type="button" hidden>Sign out</button>
     </footer>
   </div>
 </body>

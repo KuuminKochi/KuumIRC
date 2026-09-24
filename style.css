@@ -15,22 +15,34 @@ input { min-width: 0; padding: 5px 7px; border: 1px solid #999; border-radius: 2
 .line time { flex: none; color: #777; font-size: 11px; }
 .line strong { flex: none; color: #205496; }
 .line span { white-space: pre-wrap; }
+.line > span { flex: 1; min-width: 0; }
+.media-attachments { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 6px; white-space: normal; }
+.line img, .line video, .line audio { max-width: 100%; height: auto; }
+.line mjx-container { max-width: 100%; overflow-x: auto; }
 .event { color: #666; }
 .member-pane { overflow-y: auto; border-left: 1px solid #aaa; font: 12px/1.5 ui-monospace, 'Courier New', monospace; }
 #members { list-style: none; margin: 0; padding: 6px; }
 #members li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer { display: flex; gap: 7px; padding: 8px; border-top: 1px solid #aaa; }
 .composer input { flex: 1; }
-footer { position: relative; display: flex; align-items: center; gap: 12px; min-height: 28px; padding: 3px 8px; border-top: 1px solid #bbb; color: #555; font-size: 12px; }
-#status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+footer { position: relative; display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 8px; border-top: 1px solid #bbb; color: #555; font-size: 12px; }
+#status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: auto; max-width: 35vw; }
 #status.error { color: #a22222; }
-#disconnect-button { margin-left: auto; padding: 2px 8px; }
+#disconnect-button { flex: none; padding: 2px 8px; }
+.channels { display: flex; gap: 3px; flex: 1; min-width: 0; overflow-x: auto; }
+.channels button { flex: none; padding: 2px 7px; white-space: nowrap; background: #ddd; }
+.channels button.active { background: #fff; font-weight: bold; }
+#join-toggle { flex: none; padding: 2px 7px; }
+#join-form { position: absolute; left: 8px; bottom: 100%; z-index: 1; display: flex; gap: 5px; padding: 9px; border: 1px solid #999; background: #ececec; }
+#join-form input { width: 130px; }
 #connection summary { cursor: pointer; list-style: none; color: #205496; }
 #connection summary::-webkit-details-marker { display: none; }
 #connection summary:hover { text-decoration: underline; }
 #connect-form { position: absolute; left: 0; bottom: 100%; z-index: 1; display: grid; gap: 5px; width: min(300px, 100vw); padding: 14px; border: 1px solid #999; background: #ececec; box-shadow: 1px -2px 5px #0002; }
 #connect-form input { width: 100%; margin-bottom: 5px; }
-#connect-form button { justify-self: start; }
+#connect-form .remember { display: flex; align-items: center; gap: 6px; }
+#connect-form .remember input { width: auto; margin: 0; }
+.connect-actions { display: flex; gap: 7px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 @media (max-width: 600px) {
   .workspace { grid-template-columns: minmax(0, 1fr) 96px; }

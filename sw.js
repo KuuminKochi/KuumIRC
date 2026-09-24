@@ -1,5 +1,5 @@
-const CACHE = 'kuumirc-shell-v3';
-const SHELL = ['./', './index.html', './style.css', './client.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
+const CACHE = 'kuumirc-shell-v8';
+const SHELL = ['./', './index.html', './style.css', './client.js', './render.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
