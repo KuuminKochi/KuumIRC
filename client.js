@@ -6,6 +6,13 @@ const status = document.querySelector('#status');
 const messageInput = document.querySelector('#message');
 const attachButton = document.querySelector('#attach-button');
 const attachmentInput = document.querySelector('#attachment');
+const attachmentDraft = document.querySelector('#attachment-draft');
+const attachmentImage = document.querySelector('#attachment-image');
+const attachmentVideo = document.querySelector('#attachment-video');
+const attachmentName = document.querySelector('#attachment-name');
+const attachmentState = document.querySelector('#attachment-state');
+const removeAttachment = document.querySelector('#remove-attachment');
+const uploadProgress = document.querySelector('#upload-progress');
 const sendButton = document.querySelector('#send-button');
 const disconnectButton = document.querySelector('#disconnect-button');
 const memberList = document.querySelector('#members');
@@ -22,6 +29,7 @@ const encoder = new TextEncoder();
 const SESSION_KEY = 'kuumirc-session';
 const TAB_KEY = 'kuumirc-tabs:';
 const wantedCaps = ['draft/chathistory', 'batch', 'server-time', 'message-tags', 'echo-message'];
+const UPLOAD_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm', 'video/ogg']);
 let caps = new Set();
 let advertised = new Set();
 let session;
@@ -29,6 +37,7 @@ let historyBatch = '';
 let historyPending = false;
 let historyMessages = [];
 let historyResizeObserver;
+let previousBottom = 0;
 let liveMessages = [];
 const seen = new Set();
 let socket;
@@ -46,6 +55,11 @@ let authFailed = false;
 let tabOrder = [];
 let hiddenTabs = new Set();
 let editingTabs = false;
+let stagedFile;
+let stagedUrl;
+let stagedLink;
+let uploading = false;
+let activeUpload;
 
 function setStatus(text, error = false) {
   status.textContent = text;
@@ -213,8 +227,6 @@ function memberKey(name) {
 }
 
 function addLine(name, text, event = false, time = '', id = '') {
-  historyResizeObserver?.disconnect();
-  historyResizeObserver = undefined;
   const bottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 48;
   const item = document.createElement('li');
   item.className = event ? 'event' : 'line';
@@ -237,6 +249,12 @@ function addLine(name, text, event = false, time = '', id = '') {
     messages.firstElementChild.remove();
   }
   if (bottom) messages.scrollTop = messages.scrollHeight;
+  if (historyResizeObserver) {
+    historyResizeObserver.disconnect();
+    previousBottom = messages.scrollHeight - messages.clientHeight;
+    historyResizeObserver.observe(messages);
+    historyResizeObserver.observe(item);
+  }
 }
 
 function parse(line) {
@@ -281,11 +299,12 @@ function completeHistory() {
   historyBatch = '';
   messages.scrollTop = messages.scrollHeight;
   if (messages.lastElementChild) {
-    let previousBottom = messages.scrollHeight - messages.clientHeight;
+    previousBottom = messages.scrollHeight - messages.clientHeight;
     historyResizeObserver = new ResizeObserver(() => {
       if (messages.scrollTop >= previousBottom - 48) messages.scrollTop = messages.scrollHeight;
       previousBottom = messages.scrollHeight - messages.clientHeight;
     });
+    historyResizeObserver.observe(messages);
     historyResizeObserver.observe(messages.lastElementChild);
   }
   setStatus('Connected');
@@ -641,27 +660,85 @@ function runCommand(input) {
 }
 
 
-async function postUpload(file, credentials) {
-  const response = await fetch('/media-upload', {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${credentials}`,
-      'Content-Type': file.type
-    },
-    body: file,
-    cache: 'no-store'
-  });
-  if (response.status !== 201) throw new Error(`Upload failed (HTTP ${response.status}).`);
-  let result;
-  try {
-    result = await response.json();
-  } catch {
-    throw new Error('Upload returned an invalid response.');
+function clearAttachment() {
+  attachmentImage.removeAttribute('src');
+  attachmentVideo.pause();
+  if (attachmentVideo.src) {
+    attachmentVideo.removeAttribute('src');
+    attachmentVideo.load();
   }
-  const mediaUrl = validateMediaUrl(result?.url);
-  const posterUrl = result?.poster == null ? null : validateMediaUrl(result.poster);
-  if (!mediaUrl || (result.poster != null && !posterUrl)) throw new Error('Upload returned an invalid link.');
-  return { mediaUrl, posterUrl };
+  if (stagedUrl) URL.revokeObjectURL(stagedUrl);
+  stagedFile = stagedUrl = stagedLink = undefined;
+  attachmentDraft.hidden = true;
+  uploadProgress.hidden = true;
+  uploadProgress.value = 0;
+  attachmentState.textContent = 'Ready to send';
+  attachmentInput.value = '';
+}
+
+function stageAttachment(file) {
+  const isVideo = file.type.startsWith('video/');
+  if (!UPLOAD_TYPES.has(file.type) || !file.size || file.size > (isVideo ? 100 : 10) * 1024 * 1024) {
+    setStatus('Use JPEG, PNG, or static WebP up to 10 MiB, or MP4/WebM/OGG up to 100 MiB.', true);
+    attachmentInput.value = '';
+    return;
+  }
+  clearAttachment();
+  stagedFile = file;
+  stagedUrl = URL.createObjectURL(file);
+  const size = file.size < 1024 * 1024 ? `${Math.ceil(file.size / 1024)} KiB` : `${(file.size / 1024 / 1024).toFixed(1)} MiB`;
+  attachmentName.textContent = `${file.name} (${size})`;
+  attachmentImage.hidden = isVideo;
+  attachmentVideo.hidden = !isVideo;
+  if (isVideo) {
+    attachmentVideo.onloadedmetadata = () => {
+      if (Number.isFinite(attachmentVideo.duration) && attachmentVideo.duration > 0) {
+        try { attachmentVideo.currentTime = Math.min(0.5, attachmentVideo.duration / 2); } catch {}
+      }
+    };
+    attachmentVideo.src = stagedUrl;
+  } else {
+    attachmentImage.src = stagedUrl;
+  }
+  attachmentDraft.hidden = false;
+  attachmentState.textContent = 'Ready to send';
+}
+
+function postUpload(file, credentials, onProgress, onProcessing) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', '/media-upload');
+    request.setRequestHeader('Authorization', `Basic ${credentials}`);
+    request.setRequestHeader('Content-Type', file.type);
+    request.upload.onprogress = event => onProgress(event.lengthComputable && event.total > 0 ? Math.min(100, Math.round(event.loaded / event.total * 100)) : null);
+    request.upload.onload = onProcessing;
+    request.onerror = () => reject(new Error('Upload connection failed.'));
+    request.onabort = () => reject(new Error('Upload cancelled.'));
+    request.onload = () => {
+      if (request.status !== 201) {
+        let reason;
+        try { reason = JSON.parse(request.responseText)?.error; } catch {}
+        reject(new Error(typeof reason === 'string' ? reason : `Upload failed (HTTP ${request.status}).`));
+        return;
+      }
+      let result;
+      try {
+        result = JSON.parse(request.responseText);
+      } catch {
+        reject(new Error('Upload returned an invalid response.'));
+        return;
+      }
+      const mediaUrl = validateMediaUrl(result?.url);
+      const posterUrl = result?.poster == null ? null : validateMediaUrl(result.poster);
+      if (!mediaUrl || (result.poster != null && !posterUrl)) reject(new Error('Upload returned an invalid link.'));
+      else resolve({ mediaUrl, posterUrl });
+    };
+    activeUpload = request;
+    request.addEventListener('loadend', () => {
+      if (activeUpload === request) activeUpload = undefined;
+    }, { once: true });
+    request.send(file);
+  });
 }
 
 function validateMediaUrl(value) {
@@ -675,36 +752,73 @@ function validateMediaUrl(value) {
   }
 }
 
-async function uploadAttachment(file) {
-  const allowed = new Set(['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'video/webm', 'video/ogg']);
-  const isVideo = file.type.startsWith('video/');
-  const maxSize = isVideo ? 100 * 1024 * 1024 : 10 * 1024 * 1024;
-  if (!joined || !socket || !allowed.has(file.type) || file.size > maxSize || !file.size) {
-    setStatus('Use JPEG, PNG, or static WebP images up to 10 MiB, or MP4/WebM/OGG videos up to 100 MiB.', true);
-    return;
+async function uploadAttachment(file, caption) {
+  if (!joined || !socket || uploading) return false;
+  if (encoder.encode(caption).length > 120) {
+    setStatus('Attachment captions must be under 120 bytes.', true);
+    return false;
   }
   const target = channel;
-  const credentials = btoa(String.fromCharCode(...encoder.encode(`${session.username}:${session.password}`)));
-  attachButton.disabled = true;
-  setStatus('Uploading media…');
+  let link = stagedLink;
+  uploading = true;
+  attachButton.disabled = sendButton.disabled = removeAttachment.disabled = true;
+  uploadProgress.hidden = false;
+  uploadProgress.value = 0;
+  attachmentState.textContent = 'Uploading… 0%';
+  setStatus(`Uploading to ${target}…`);
   try {
-    const { mediaUrl, posterUrl } = await postUpload(file, credentials);
-    if (isVideo && !posterUrl) throw new Error('Upload returned an invalid video preview.');
-    const link = isVideo ? `${mediaUrl}#poster=${encodeURIComponent(posterUrl)}` : mediaUrl;
-    if (!channels.has(target.toLowerCase()) || !sendMessage(target, link)) throw new Error('Uploaded, but could not send the link.');
-    setStatus('Connected');
+    if (!link) {
+      const credentials = btoa(String.fromCharCode(...encoder.encode(`${session.username}:${session.password}`)));
+      const uploaded = await postUpload(file, credentials, percent => {
+        if (percent == null) {
+          uploadProgress.removeAttribute('value');
+          attachmentState.textContent = 'Uploading…';
+        } else {
+          uploadProgress.value = percent;
+          attachmentState.textContent = `Uploading… ${percent}%`;
+        }
+      }, () => {
+        uploadProgress.removeAttribute('value');
+        attachmentState.textContent = `Processing ${file.type.startsWith('video/') ? 'video' : 'image'}…`;
+        setStatus(attachmentState.textContent);
+      });
+      if (file.type.startsWith('video/') && !uploaded.posterUrl) throw new Error('Upload returned an invalid video preview.');
+      link = uploaded.posterUrl ? `${uploaded.mediaUrl}#poster=${encodeURIComponent(uploaded.posterUrl)}` : uploaded.mediaUrl;
+      stagedLink = link;
+    }
+    const text = caption ? `${caption} ${link}` : link;
+    if (!channels.has(target.toLowerCase()) || !sendMessage(target, text)) throw new Error('Uploaded, but could not send the link.');
+    if (messageInput.value.trim() === caption) messageInput.value = '';
+    clearAttachment();
+    setStatus(target.toLowerCase() === channel.toLowerCase() ? 'Connected' : `Sent to ${target}`);
+    return true;
   } catch (error) {
-    setStatus(error.message || 'Upload failed.', true);
+    if (!signedOut) {
+      attachmentState.textContent = 'Not sent. Press Send to retry.';
+      setStatus(error.message || 'Upload failed.', true);
+    }
+    return false;
   } finally {
-    attachButton.disabled = !joined;
-    attachmentInput.value = '';
+    uploading = false;
+    attachButton.disabled = !joined || signedOut;
+    sendButton.disabled = !joined || signedOut;
+    removeAttachment.disabled = false;
+    uploadProgress.hidden = true;
   }
 }
 
 messageForm.addEventListener('submit', event => {
   event.preventDefault();
   const text = messageInput.value.trim();
-  if (!joined || !text) return;
+  if (!joined || uploading || (!text && !stagedFile)) return;
+  if (stagedFile) {
+    if (text.startsWith('/') && !text.startsWith('//')) {
+      setStatus('Remove the attachment before using a /command.', true);
+      return;
+    }
+    uploadAttachment(stagedFile, text.startsWith('//') ? text.slice(1) : text);
+    return;
+  }
   const sent = text.startsWith('/')
     ? (text.startsWith('//') ? sendMessage(channel, text.slice(1)) : runCommand(text))
     : sendMessage(channel, text);
@@ -714,7 +828,10 @@ messageForm.addEventListener('submit', event => {
 attachButton.addEventListener('click', () => attachmentInput.click());
 attachmentInput.addEventListener('change', () => {
   const file = attachmentInput.files?.[0];
-  if (file) uploadAttachment(file);
+  if (file) stageAttachment(file);
+});
+removeAttachment.addEventListener('click', () => {
+  if (!uploading) clearAttachment();
 });
 
 editTabs.addEventListener('click', () => {
@@ -757,6 +874,8 @@ joinForm.addEventListener('submit', event => {
 
 disconnectButton.addEventListener('click', () => {
   signedOut = true;
+  activeUpload?.abort();
+  clearAttachment();
   clearTimeout(retryTimer);
   clearSession();
   remember.checked = false;
@@ -771,6 +890,7 @@ disconnectButton.addEventListener('click', () => {
   }
 });
 
+if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 try {
   const persistent = localStorage.getItem(SESSION_KEY);
   const saved = JSON.parse(persistent || sessionStorage.getItem(SESSION_KEY));
@@ -789,4 +909,4 @@ window.addEventListener('online', () => {
     connect(session.username, session.password, session.channel, true);
   }
 });
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });

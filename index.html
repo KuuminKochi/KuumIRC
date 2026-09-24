@@ -18,7 +18,17 @@
       <ol id="messages" role="log" aria-label="Channel messages" aria-live="polite" aria-relevant="additions"><li class="event">Connect to start chatting.</li></ol>
       <aside class="member-pane" aria-label="Channel members"><ul id="members"></ul></aside>
     </main>
-    <form id="message-form" class="composer"><button id="attach-button" type="button" aria-label="Attach image or video" disabled>Attach</button><input id="attachment" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/ogg" hidden><label for="message" class="visually-hidden">Message</label><input id="message" placeholder="Message #lobby" maxlength="400" autocomplete="off" disabled><button id="send-button" type="submit" disabled>Send</button></form>
+    <form id="message-form" class="composer">
+      <div id="attachment-draft" class="attachment-draft" hidden>
+        <img id="attachment-image" alt="" hidden>
+        <video id="attachment-video" muted playsinline preload="metadata" hidden></video>
+        <div class="attachment-details"><span id="attachment-name"></span><span id="attachment-state" role="status">Ready to send</span></div>
+        <button id="remove-attachment" type="button" aria-label="Remove attachment">×</button>
+        <label for="upload-progress" class="visually-hidden">Upload progress</label>
+        <progress id="upload-progress" max="100" value="0" hidden></progress>
+      </div>
+      <div class="compose-row"><button id="attach-button" type="button" aria-label="Attach image or video" disabled>Attach</button><input id="attachment" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/ogg" hidden><label for="message" class="visually-hidden">Message</label><input id="message" placeholder="Message #lobby" maxlength="400" autocomplete="off" disabled><button id="send-button" type="submit" disabled>Send</button></div>
+    </form>
     <footer>
       <details id="connection"><summary>Connect</summary>
         <form id="connect-form" autocomplete="off">
